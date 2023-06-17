@@ -11,6 +11,12 @@ typedef struct equipment
   int socket;
 } equipment;
 
+typedef struct peer
+{
+  int id;
+  int active;
+  int socket;
+} peer;
 typedef struct control
 {
   char message[BUFSZ];
@@ -20,25 +26,28 @@ typedef struct control
 int equipmentCount = 0;
 equipment equipments[MAX_EQUIPMENT];
 
+int peerCount = 0;
+peer peers[MAX_PEERS];
+
 control commandInterpreter(char *command)
 {
   // close connection -> fecha a conexão do proprio servidor
   // list equipment -> lista os equipamentos conectados
 
   control serverCommand;
-  if(strcmp(command, "close connection") == 0)
+  if (strcmp(command, "close connection") == 0)
   {
     serverCommand.send_server = 1;
     // verificar se tem conexão com algum peer na rede
     // se sim desconectar de todos
     // se não imprimir "No peer connected to close connection"
   }
-  else if(strcmp(command, "list equipment") == 0)
+  else if (strcmp(command, "list equipment") == 0)
   {
-    for(int i = 0; i < MAX_EQUIPMENT; i++)
+    for (int i = 0; i < MAX_EQUIPMENT; i++)
     {
-      if(equipments[i].installed)
-        printf("%02d ", i+1);
+      if (equipments[i].installed)
+        printf("%02d ", i + 1);
     }
   }
   else
@@ -81,6 +90,52 @@ response resolveHandler(char *message)
   return response;
 }
 
+response addNewPeer(int serverSocket)
+{
+  int newId;
+  for (int i = 0; i < MAX_PEERS; i++)
+  {
+    if (!peers[i].active)
+    {
+      newId = peers[i].id;
+      peers[i].active = 1;
+      peers[i].socket = serverSocket;
+      peerCount++;
+      break;
+    }
+  }
+
+  printf("Peer %d added\n", newId);
+
+  char msg[BUFSZ];
+  memset(msg, 0, BUFSZ);
+  sprintf(msg, "%02d %02d\n", REQ_ADDPEER, newId);
+  for (int i = 0; i < MAX_PEERS; i++)
+  {
+    if (peers[i].active)
+    {
+      sendMessage(peers[i].socket, msg);
+    }
+  }
+
+  memset(msg, 0, BUFSZ);
+  sprintf(msg, "%02d", RES_LIST);
+  for (int i = 0; i < MAX_PEERS; i++)
+  {
+    if (peers[i].active)
+    {
+      char activeId[BUFSZ];
+      sprintf(activeId, " %02d", peers[i].id);
+      strcat(msg, activeId);
+    }
+  }
+  strcat(msg, "\n");
+  sendMessage(peers[newId - 1].socket, msg);
+
+  return resolveHandler(msg);
+}
+
+
 response addNewEquipment(int clientSocket)
 {
   int newId;
@@ -108,8 +163,6 @@ response addNewEquipment(int clientSocket)
       sendMessage(equipments[i].socket, msg);
     }
   }
-
-  usleep(1000); // Sleep between messages
 
   memset(msg, 0, BUFSZ);
   sprintf(msg, "%02d", RES_LIST);
@@ -144,7 +197,7 @@ response removeEquipment(int id)
 
   sprintf(msg, "%02d %02d %02d", OK, id, 1);
   sendMessage(equipments[id - 1].socket, msg);
-  printf("Equipment %02d removed\n", id);
+  printf("Equipment %d removed\n", id);
 
   for (int i = 0; i < MAX_EQUIPMENT; i++)
   {
@@ -155,7 +208,7 @@ response removeEquipment(int id)
     }
   }
 
-  return exitHandler("Success");
+  return exitHandler("Successful removal");
 }
 
 int isValidId(int id)
@@ -217,7 +270,7 @@ response informationResult(int sourceId, int destineId, float temperature)
   return resolveHandler("Success");
 }
 
-response handleCommands(char *buf, int clientSocket)
+response handleCommands(char *buf, int clientSocket, int serverSocket)
 {
   char *splittedCommand = strtok(buf, " ");
   int commandId = atoi(splittedCommand);
@@ -225,6 +278,8 @@ response handleCommands(char *buf, int clientSocket)
 
   switch (commandId)
   {
+  case REQ_ADDPEER:
+    return addNewPeer(serverSocket);
   case REQ_ADD:
     return addNewEquipment(clientSocket);
   case REQ_REM:
@@ -254,7 +309,7 @@ response handleCommands(char *buf, int clientSocket)
 
 int main(int argc, char *argv[])
 {
-  if( argc != 4)
+  if (argc != 4)
   {
     printf("Usage: %s <ip> <PeerPort> <ClientPort>\n", argv[0]);
     exit(EXIT_FAILURE);
@@ -263,6 +318,7 @@ int main(int argc, char *argv[])
   struct sockaddr_storage storage;
   server_sockaddr_init(argv[3], &storage);
 
+  //todo: criar o sockets dos outros peers
   int s = socket(storage.ss_family, SOCK_STREAM, 0);
   if (s == -1)
   {
@@ -279,11 +335,13 @@ int main(int argc, char *argv[])
   {
     logexit("listen");
   }
+  
 
   char addrstr[BUFSZ];
   addrtostr(addr, addrstr, BUFSZ);
 
   initializeEquipments();
+
   fd_set read_fds, master_fds;
   int fdmax;
   FD_ZERO(&master_fds);
@@ -293,8 +351,6 @@ int main(int argc, char *argv[])
 
   while (1)
   {
-    
-
 
     read_fds = master_fds;
     if (select(fdmax + 1, &read_fds, NULL, NULL, NULL) == -1)
@@ -304,12 +360,9 @@ int main(int argc, char *argv[])
 
     for (int i = 0; i <= fdmax; i++)
     {
-          
-
 
       if (FD_ISSET(i, &read_fds))
       {
-       
 
         if (i == s)
         {
@@ -334,7 +387,7 @@ int main(int argc, char *argv[])
           printf("New connection from %s on socket %d\n", caddrstr, csock);
         }
         else
-        {          
+        {
           char buf[BUFSZ];
           memset(buf, 0, BUFSZ);
           int nbytes = recv(i, buf, sizeof(buf), 0);
@@ -342,11 +395,7 @@ int main(int argc, char *argv[])
 
           if (nbytes <= 0)
           {
-            if (nbytes == 0)
-            {
-              printf("Socket %d hung up\n", i);
-            }
-            else
+            if (nbytes != 0)
             {
               perror("recv");
             }
@@ -356,7 +405,7 @@ int main(int argc, char *argv[])
           }
           else
           {
-            response res = handleCommands(buf, i);
+            response res = handleCommands(buf, i, s); // mudar pra os possivei sockets de servers
             if (res.endConnection)
             {
               close(i);
@@ -365,8 +414,6 @@ int main(int argc, char *argv[])
           }
         }
       }
-
-      
     }
   }
   exit(EXIT_SUCCESS);

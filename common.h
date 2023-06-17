@@ -1,14 +1,14 @@
 #pragma once
 #include <stdlib.h>
 #include <arpa/inet.h>
-#include <pthread.h>
 
 #define BUFSZ 1024
 
-#define MAX_EQUIPMENT 15
+#define MAX_EQUIPMENT 2
+#define MAX_PEERS 2
 
 enum COMMAND_TYPE
-{   
+{
     REQ_ADDPEER = 1,
     REQ_RMPEER = 2,
     REQ_ADDC2P = 3,
